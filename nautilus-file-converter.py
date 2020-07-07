@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# Nautilus File Converter 1.0.0
+# Nautilus File Converter 1.1.0
 # Copyright (C) 2020 Piers Bowater https://bowater.org/projects/nautilus-file-converter
 #
-# Folder Color is free software; you can redistribute it and/or modify
+# FNautilus File Converter is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 #
-# Folder Color is distributed in the hope that it will be useful,
+# Nautilus File Converter is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
@@ -19,8 +19,9 @@
 import gi, subprocess, threading, os
 
 from gi.repository import Nautilus, GObject, Gio, Gtk, GdkPixbuf
-from urllib import unquote
+from urllib.parse import unquote
 from distutils.spawn import find_executable
+from zipfile import ZipFile, is_zipfile
 try:
     from PIL import Image
 
@@ -28,6 +29,12 @@ try:
 except ImportError:
     PIL = False
 
+try:
+    from rarfile import RarFile, is_rarfile
+
+    RAR = True
+except ImportError:
+    RAR = False
 
 gi.require_version('Nautilus', '3.0')
 gi.require_version('Gtk', '3.0')
@@ -42,7 +49,6 @@ def change_extension(old_path, new_extension):
     split_ver[-1] = new_extension
     return '.'.join(split_ver)
 
-
 def find_uri_not_in_use(new_uri, new_uris):
     i = 1
     while os.path.isfile(new_uri) or new_uri in new_uris:
@@ -51,6 +57,14 @@ def find_uri_not_in_use(new_uri, new_uris):
         new_uri = '.'.join(new_uri)
         i = i + 1
     return new_uri
+
+def get_archive_handler(archive_uri):
+    if is_zipfile(archive_uri):
+        return ZipFile
+    elif is_rarfile(archive_uri):
+        return RarFile
+    else:
+        raise TypeError
 
 
 READ_FORMATS = {}
@@ -69,6 +83,11 @@ if PIL:
                               {'name': 'ICO', 'mimes': ['image/x-icon']},
                               {'name': 'WebP', 'mimes': ['image/webp']},
                               {'name': 'EPS', 'mimes': ['application/postscript']}]
+    if RAR:
+        READ_FORMATS['Comic'] = ['application/vnd.comicbook+zip', 'application/vnd.comicbook-rar']
+    else:
+        READ_FORMATS['Comic'] = ['application/vnd.comicbook+zip']
+    WRITE_FORMATS['Comic'] = [{'name': 'PDF', 'mimes': ['application/pdf']}]
 
 if find_executable('ffmpeg'):
     READ_FORMATS['Audio'] = ['audio/mpeg', 'audio/mpeg3', 'video/x-mpeg', 'audio/x-mpeg-3',  # MP3
@@ -198,6 +217,15 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
             for item in to_process:
                 self.processes.append(
                     subprocess.Popen("pandoc -o '" + item['new_uri'] + "' '" + item['old_uri'] + "'", shell=True))
+        elif valid_group == 'Comic':
+            for item in to_process:
+                with get_archive_handler(item['old_uri'])(item['old_uri'], 'r') as archive:
+                    image_list = []
+                    for archive_file_name in archive.namelist():
+                        archive_file = archive.open(archive_file_name)
+                        image_list.append(Image.open(archive_file))
+                if image_list:
+                    image_list[0].save(item['new_uri'], "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
 
         thread = threading.Thread(target=self.remove_bar_when_done)
         thread.start()
