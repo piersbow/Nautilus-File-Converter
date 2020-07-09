@@ -223,7 +223,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
                     image_list = []
                     for archive_file_name in archive.namelist():
                         archive_file = archive.open(archive_file_name)
-                        image_list.append(Image.open(archive_file))
+                        image_list.append(Image.open(archive_file).convert())
                 if image_list:
                     image_list[0].save(item['new_uri'], "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
 
