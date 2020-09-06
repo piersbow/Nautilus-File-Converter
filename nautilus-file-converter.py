@@ -222,8 +222,12 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
                 with get_archive_handler(item['old_uri'])(item['old_uri'], 'r') as archive:
                     image_list = []
                     for archive_file_name in archive.namelist():
-                        archive_file = archive.open(archive_file_name)
-                        image_list.append(Image.open(archive_file).convert())
+                        if not archive_file_name[-1] == "/":	# not directory
+                            archive_file = archive.open(archive_file_name)
+                            try:
+                                image_list.append(Image.open(archive_file).convert())
+                            except IOError:
+                            	pass
                 if image_list:
                     image_list[0].save(item['new_uri'], "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
 
