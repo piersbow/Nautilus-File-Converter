@@ -16,12 +16,15 @@
 # along with Nautilus File Converter; if not, see http://www.gnu.org/licenses
 # for more information.
 
-import gi, subprocess, threading, os
-
-from gi.repository import Nautilus, GObject, Gio, Gtk, GdkPixbuf
+import os
+import multiprocessing as mp
+import gi
+import time
+from gi.repository import Nautilus, GObject, Gio, Gtk, GLib, GdkPixbuf
 from urllib.parse import unquote
 from distutils.spawn import find_executable
 from zipfile import ZipFile, is_zipfile
+
 try:
     from PIL import Image
 
@@ -43,38 +46,14 @@ DOCUMENT_CONVERTER = 'pandoc'
 AUDIO_VIDEO_CONVERTER = 'ffmpeg'
 DOC_TO_PDF_CONVERTERS = ('pdflatex', 'xelatex', 'lualatex', 'pdfroff')
 
-
-def change_extension(old_path, new_extension):
-    split_ver = old_path.split('.')
-    split_ver[-1] = new_extension
-    return '.'.join(split_ver)
-
-def find_uri_not_in_use(new_uri, new_uris):
-    i = 1
-    while os.path.isfile(new_uri) or new_uri in new_uris:
-        new_uri = new_uri.split('.')
-        new_uri[-2] = new_uri[-2] + '_' + str(i)
-        new_uri = '.'.join(new_uri)
-        i = i + 1
-    return new_uri
-
-def get_archive_handler(archive_uri):
-    if is_zipfile(archive_uri):
-        return ZipFile
-    elif is_rarfile(archive_uri):
-        return RarFile
-    else:
-        raise TypeError
-
-
 READ_FORMATS = {}
 WRITE_FORMATS = {}
 
 if PIL:
-    READ_FORMATS['Image'] = ['image/jpeg', 'image/png', 'image/bmp', 'application/postscript', 'image/gif',
+    READ_FORMATS['Image'] = {'image/jpeg', 'image/png', 'image/bmp', 'application/postscript', 'image/gif',
                              'image/x-icon', 'image/x-pcx', 'image/x-portable-pixmap', 'image/tiff', 'image/x-xbm',
                              'image/x-xbitmap', 'video/fli', 'image/vnd.fpx', 'image/vnd.net-fpx',
-                             'application/octet-stream', 'windows/metafile', 'image/x-xpixmap', 'image/webp']
+                             'application/octet-stream', 'windows/metafile', 'image/x-xpixmap', 'image/webp'}
     WRITE_FORMATS['Image'] = [{'name': 'JPEG', 'mimes': ['image/jpeg']},
                               {'name': 'PNG', 'mimes': ['image/png']},
                               {'name': 'BMP', 'mimes': ['image/bmp']},
@@ -84,13 +63,13 @@ if PIL:
                               {'name': 'WebP', 'mimes': ['image/webp']},
                               {'name': 'EPS', 'mimes': ['application/postscript']}]
     if RAR:
-        READ_FORMATS['Comic'] = ['application/vnd.comicbook+zip', 'application/vnd.comicbook-rar']
+        READ_FORMATS['Comic'] = {'application/vnd.comicbook+zip', 'application/vnd.comicbook-rar'}
     else:
-        READ_FORMATS['Comic'] = ['application/vnd.comicbook+zip']
+        READ_FORMATS['Comic'] = {'application/vnd.comicbook+zip'}
     WRITE_FORMATS['Comic'] = [{'name': 'PDF', 'mimes': ['application/pdf']}]
 
 if find_executable('ffmpeg'):
-    READ_FORMATS['Audio'] = ['audio/mpeg', 'audio/mpeg3', 'video/x-mpeg', 'audio/x-mpeg-3',  # MP3
+    READ_FORMATS['Audio'] = {'audio/mpeg', 'audio/mpeg3', 'video/x-mpeg', 'audio/x-mpeg-3',  # MP3
                              'audio/x-wav', 'audio/wav', 'audio/wave', 'audio/x-pn-wave', 'audio/vnd.wave',  # WAV
                              'audio/x-mpegurl',  # M3U
                              'audio/mp4', 'audio/mp4a-latm', 'audio/mpeg4-generic',  # M4A
@@ -98,7 +77,7 @@ if find_executable('ffmpeg'):
                              'audio/aac', 'audio/aacp', 'audio/3gpp', 'audio/3gpp2',  # ACC
                              'audio/ogg',  # OGG
                              'audio/opus',  # OPUS
-                             'audio/flac']  # FLAC
+                             'audio/flac'}  # FLAC
     WRITE_FORMATS['Audio'] = [{'name': 'MP3', 'mimes': ['audio/mpeg', 'audio/mpeg3', 'video/x-mpeg', 'audio/x-mpeg-3']},
                               {'name': 'WAV', 'mimes': ['audio/x-wav', 'audio/wav', 'audio/wave', 'audio/x-pn-wave',
                                                         'audio/vnd.wave']},
@@ -108,8 +87,8 @@ if find_executable('ffmpeg'):
                               {'name': 'OGG', 'mimes': ['audio/ogg']},
                               {'name': 'OPUS', 'mimes': ['audio/opus']}]
 
-    READ_FORMATS['Video'] = ['video/mp4', 'video/webm', 'video/x-matroska', 'video/avi', 'video/msvideo',
-                             'video/x-msvideo']
+    READ_FORMATS['Video'] = {'video/mp4', 'video/webm', 'video/x-matroska', 'video/avi', 'video/msvideo',
+                             'video/x-msvideo'}
     WRITE_FORMATS['Video'] = [{'name': 'MP4', 'mimes': ['video/mp4']},
                               {'name': 'WebM', 'mimes': ['video/webm']},
                               {'name': 'MKV', 'mimes': ['video/x-matroska']},
@@ -119,9 +98,9 @@ if find_executable('ffmpeg'):
                               {'name': 'WAV', 'mimes': ['audio/x-wav']}]
 
 if find_executable('pandoc'):
-    READ_FORMATS['Document'] = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # DOCX
+    READ_FORMATS['Document'] = {'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # DOCX
                                 'application/vnd.oasis.opendocument.text',  # ODT
-                                'application/epub+zip', 'text/plain']
+                                'application/epub+zip', 'text/plain'}
     WRITE_FORMATS['Document'] = [
         {'name': 'Docx', 'mimes': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']},
         {'name': 'ODT', 'mimes': ['application/vnd.oasis.opendocument.text']},
@@ -134,22 +113,69 @@ if find_executable('pandoc'):
             break
 
 
+def change_extension(old_path, new_extension):
+    split_ver = old_path.split('.')
+    split_ver[-1] = new_extension
+    return '.'.join(split_ver)
+
+
+def find_uri_not_in_use(new_uri):
+    i = 1
+    while os.path.isfile(new_uri):
+        new_uri = new_uri.split('.')
+        new_uri[-2] = new_uri[-2] + '_' + str(i)
+        new_uri = '.'.join(new_uri)
+        i = i + 1
+    return new_uri
+
+
+def get_archive_handler(archive_uri):
+    if is_zipfile(archive_uri):
+        return ZipFile
+    elif is_rarfile(archive_uri):
+        return RarFile
+    else:
+        raise TypeError
+
+
 class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWidgetProvider):
     def __init__(self):
+        super().__init__()
         self.infobar_hbox = None
         self.infobar = None
-        self.processes = []
+
+    def get_widget(self, uri, window) -> Gtk.Widget:
+        """ This is the method that we have to implement (because we're
+        a LocationWidgetProvider) in order to show our infobar.
+        """
+        self.infobar = Gtk.InfoBar()
+        self.infobar.set_message_type(Gtk.MessageType.ERROR)
+        self.infobar.connect("response", self.__cb_infobar_response)
+
+        return self.infobar
+
+    def __cb_infobar_response(self, infobar, response):
+        """ Callback for the infobar close button.
+        """
+        if response == Gtk.ResponseType.CLOSE:
+            self.infobar_hbox.destroy()
+            self.infobar.hide()
 
     def get_file_items(self, window, files):
-        all_mimes = []
-        for indv_file in files:  # get all mime types in selected files
-            all_mimes.append(indv_file.get_mime_type())
-        all_mimes = set(all_mimes)  # remove duplicate MIMES
+        # create set of each mime type
+        all_mimes = set()
+        number_mimes = 0
+        mime_type = None
+        for file in files:
+            mime_type = file.get_mime_type()
+            if mime_type not in all_mimes:
+                number_mimes += 1
+                all_mimes.add(mime_type)
 
         # find group of read formats which contain all the mime types
         valid_group = None
         for key in READ_FORMATS.keys():
-            if all_mimes <= set(READ_FORMATS[key]):
+            if all_mimes <= READ_FORMATS[key]:
                 valid_group = key
                 break
         # if no valid groups exit
@@ -157,10 +183,8 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
             return
 
         # if only one type of file selected, do not convert to same type again
-        if len(all_mimes) == 1:
-            mime_not_include = list(all_mimes)[0]
-        else:
-            mime_not_include = None
+        if number_mimes != 1:
+            mime_type = None
 
         # create main menu called 'Convert to..'
         convert_menu = Nautilus.MenuItem(name='ExampleMenuProvider::ConvertTo', label='Convert to...', tip='', icon='')
@@ -168,7 +192,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
         convert_menu.set_submenu(submenu1)  # make submenu
 
         for write_format in WRITE_FORMATS[valid_group]:
-            if mime_not_include not in write_format['mimes']:
+            if mime_type not in write_format['mimes']:
                 sub_menuitem = Nautilus.MenuItem(name='ExampleMenuProvider::' + write_format['name'],
                                                  label=write_format['name'], tip='', icon='')
 
@@ -178,82 +202,108 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
 
         return convert_menu,
 
-    def get_background_items(self, window, file):
-        return None
+    def on_click(self, menu, files, write_format, convert_type):
+        # create progress bar
+        progressbar = self.__create_progressbar()
+        progressbar.set_text("Converting")
+        progressbar.set_pulse_step = 1.0 / len(files)
+        self.infobar.show_all()
 
-    def get_widget(self, uri, window):
-        self.infobar = Gtk.InfoBar()
-        self.infobar.set_message_type(Gtk.MessageType.ERROR)
+        processing_queue = mp.Queue()
 
-        return self.infobar
+        convert_process = mp.Process(target=self.__convert_files,
+                                     args=(files, convert_type, write_format, processing_queue))
+        convert_process.daemon = True
+        convert_process.start()
 
-    # converting functions
+        GLib.timeout_add(100, self.__update_progressbar, processing_queue, progressbar)
 
-    def on_click(self, menu, files, write_format, valid_group):
-        to_process = []
-        new_uris = []
-        for file in files:  # create list of items to process
-            old_uri = file.get_uri()[7:]  # removes the file:// at start of uri
-            if file.get_mime_type() not in write_format['mimes']:  # if the current file is not already the right format
-                new_uri = change_extension(old_uri, write_format['name'].lower())  # gets ideal new uri
-                new_uri = find_uri_not_in_use(new_uri, new_uris)  # makes sure new uri not in use, if so changes it
-                new_uris.append(unquote(new_uri))  # adds this to the list of new file names
-                to_process.append({'old_uri': unquote(old_uri), 'new_uri': unquote(new_uri)})
+    def __convert_files(self, files, convert_type, write_format, processing_queue):
+        def convert_image(in_uri, out_uri):
+            Image.open(in_uri).convert('RGB').save(out_uri)
 
-        self.__create_loadingbar("Converting, this may take awhile")
+        def convert_audio(in_uri, out_uri):
+            os.system("ffmpeg -i '" + in_uri + "' '" + out_uri + "'")
 
-        if valid_group == 'Image':
-            for item in to_process:
-                Image.open(item['old_uri']).convert('RGB').save(item['new_uri'])
-        elif valid_group == 'Audio':
-            for item in to_process:
-                self.processes.append(
-                    subprocess.Popen("ffmpeg -i '" + item['old_uri'] + "' '" + item['new_uri'] + "'", shell=True))
-        elif valid_group == 'Video':
-            for item in to_process:
-                self.processes.append(
-                    subprocess.Popen("ffmpeg -i '" + item['old_uri'] + "' '" + item['new_uri'] + "'", shell=True))
-        elif valid_group == 'Document':
-            for item in to_process:
-                self.processes.append(
-                    subprocess.Popen("pandoc -o '" + item['new_uri'] + "' '" + item['old_uri'] + "'", shell=True))
-        elif valid_group == 'Comic':
-            for item in to_process:
-                with get_archive_handler(item['old_uri'])(item['old_uri'], 'r') as archive:
-                    image_list = []
-                    for archive_file_name in archive.namelist():
-                        if not archive_file_name[-1] == "/":	# not directory
-                            archive_file = archive.open(archive_file_name)
-                            try:
-                                image_list.append(Image.open(archive_file).convert())
-                            except IOError:
-                            	pass
-                if image_list:
-                    image_list[0].save(item['new_uri'], "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+        def convert_video(in_uri, out_uri):
+            os.system("ffmpeg -i '" + in_uri + "' '" + out_uri + "'")
 
-        thread = threading.Thread(target=self.remove_bar_when_done)
-        thread.start()
+        def convert_document(in_uri, out_uri):
+            os.system("pandoc -o '" + in_uri + "' '" + out_uri + "'")
+
+        def convert_comic(in_uri, out_uri):
+            with get_archive_handler(in_uri)(in_uri, 'r') as archive:
+                image_list = []
+                for archive_file_name in archive.namelist():
+                    if not archive_file_name[-1] == "/":    # not directory
+                        archive_file = archive.open(archive_file_name)
+                        try:
+                            image_list.append(Image.open(archive_file).convert())
+                        except IOError:
+                            pass
+            if image_list:
+                image_list[0].save(out_uri, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
+            for image in image_list:
+                image.close()
+
+        if convert_type == "Video":
+            convert_function = convert_video
+        elif convert_type == "Image":
+            convert_function = convert_image
+        elif convert_type == "Audio":
+            convert_function = convert_audio
+        elif convert_type == "Document":
+            convert_function = convert_document
+        elif convert_type == "Comic":
+            convert_function = convert_comic
+        else:
+            raise TypeError
+
+        for file in files:
+            if file.get_mime_type() not in write_format['mimes']:
+                old_uri = unquote(file.get_uri()[7:])
+                new_uri = find_uri_not_in_use(change_extension(old_uri, write_format['name'].lower()))
+                convert_function(old_uri, new_uri)
+                processing_queue.put(file.get_name())
+        processing_queue.put(None)
         return True
 
-    def remove_bar_when_done(self):
-        job_exits = [job.wait() for job in self.processes]
-        self.infobar_hbox.destroy()
-        self.infobar.hide()
-
-    # progress bar stuff
-
-    def __create_loadingbar(self, message):
+    def __create_progressbar(self) -> Gtk.ProgressBar:
+        """ Create the progressbar used to notify that files are currently
+        being processed.
+        """
         self.infobar.set_show_close_button(False)
+        self.infobar.set_message_type(Gtk.MessageType.INFO)
         self.infobar_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
 
-        infobar_msg = Gtk.Label(message)
-        self.infobar_hbox.pack_start(infobar_msg, False, False, 0)
+        progressbar = Gtk.ProgressBar()
+        self.infobar_hbox.pack_start(progressbar, True, True, 0)
+        progressbar.set_show_text(True)
 
         self.infobar.get_content_area().pack_start(self.infobar_hbox, True, True, 0)
         self.infobar.show_all()
 
-    def __remove_loadingbar(self):
-        self.infobar_hbox.destroy()
-        self.infobar.hide()
+        return progressbar
 
-        return False
+    def __update_progressbar(self, processing_queue, progressbar) -> bool:
+        if not processing_queue.empty():
+            fname = processing_queue.get(block=False)
+        else:
+            return True
+
+        if fname is None:
+            self.infobar_hbox.destroy()
+            self.infobar.hide()
+            if not processing_queue.empty():
+                print("Something went wrong, the queue isn't empty :/")
+            return False
+
+        progressbar.pulse()
+        progressbar.set_text("Converting %s" % fname)
+        progressbar.show_all()
+        self.infobar_hbox.show_all()
+        self.infobar.show_all()
+        return True
+
+    def get_background_items(self, window, file):
+        return None
