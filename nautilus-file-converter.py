@@ -17,9 +17,10 @@
 # for more information.
 
 import os
+import signal
 import multiprocessing as mp
 import gi
-import time
+import subprocess
 from gi.repository import Nautilus, GObject, Gio, Gtk, GLib, GdkPixbuf
 from urllib.parse import unquote
 from distutils.spawn import find_executable
@@ -143,6 +144,8 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
         super().__init__()
         self.infobar_hbox = None
         self.infobar = None
+        self.process = None
+        self.other_processes = mp.Queue()
 
     def get_widget(self, uri, window) -> Gtk.Widget:
         """ This is the method that we have to implement (because we're
@@ -160,6 +163,14 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
         if response == Gtk.ResponseType.CLOSE:
             self.infobar_hbox.destroy()
             self.infobar.hide()
+            if self.process is not None and self.process.is_alive():
+                self.process.terminate()
+                self.process.join()
+            while not self.other_processes.empty():
+                try:
+                    os.kill(self.other_processes.get(), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
     def get_file_items(self, window, files):
         # create set of each mime type
@@ -211,59 +222,54 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
 
         processing_queue = mp.Queue()
 
-        convert_process = mp.Process(target=self.__convert_files,
-                                     args=(files, convert_type, write_format, processing_queue))
-        convert_process.daemon = True
-        convert_process.start()
+        self.process = mp.Process(target=self.__convert_files,
+                                  args=(files, convert_type, write_format, processing_queue))
+        self.process.daemon = True
+        self.process.start()
 
         GLib.timeout_add(100, self.__update_progressbar, processing_queue, progressbar)
 
     def __convert_files(self, files, convert_type, write_format, processing_queue):
-        def convert_image(in_uri, out_uri):
-            Image.open(in_uri).convert('RGB').save(out_uri)
-
-        def convert_audio(in_uri, out_uri):
-            os.system("ffmpeg -i '" + in_uri + "' '" + out_uri + "'")
-
-        def convert_video(in_uri, out_uri):
-            os.system("ffmpeg -i '" + in_uri + "' '" + out_uri + "'")
-
-        def convert_document(in_uri, out_uri):
-            os.system("pandoc -o '" + in_uri + "' '" + out_uri + "'")
-
-        def convert_comic(in_uri, out_uri):
-            with get_archive_handler(in_uri)(in_uri, 'r') as archive:
-                image_list = []
-                for archive_file_name in archive.namelist():
-                    if not archive_file_name[-1] == "/":    # not directory
-                        archive_file = archive.open(archive_file_name)
-                        try:
-                            image_list.append(Image.open(archive_file).convert())
-                        except IOError:
-                            pass
-            if image_list:
-                image_list[0].save(out_uri, "PDF", resolution=100.0, save_all=True, append_images=image_list[1:])
-            for image in image_list:
-                image.close()
-
-        if convert_type == "Video":
-            convert_function = convert_video
-        elif convert_type == "Image":
-            convert_function = convert_image
-        elif convert_type == "Audio":
-            convert_function = convert_audio
-        elif convert_type == "Document":
-            convert_function = convert_document
-        elif convert_type == "Comic":
-            convert_function = convert_comic
-        else:
-            raise TypeError
-
         for file in files:
             if file.get_mime_type() not in write_format['mimes']:
                 old_uri = unquote(file.get_uri()[7:])
                 new_uri = find_uri_not_in_use(change_extension(old_uri, write_format['name'].lower()))
-                convert_function(old_uri, new_uri)
+                if convert_type == "Video":
+                    process = subprocess.Popen("exec ffmpeg -i '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    self.other_processes.put(process.pid)
+                    process.wait()
+                    self.other_processes.get()
+
+                elif convert_type == "Image":
+                    Image.open(old_uri).convert('RGB').save(new_uri)
+
+                elif convert_type == "Audio":
+                    process = subprocess.Popen("exec ffmpeg -i '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    self.other_processes.put(process.pid)
+                    process.wait()
+                    self.other_processes.get()
+
+                elif convert_type == "Document":
+                    process = subprocess.Popen("exec pandoc -o '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    self.other_processes.put(process.pid)
+                    process.wait()
+                    self.other_processes.get()
+
+                elif convert_type == "Comic":
+                    with get_archive_handler(old_uri)(old_uri, 'r') as archive:
+                        image_list = []
+                        for archive_file_name in archive.namelist():
+                            if not archive_file_name[-1] == "/":  # not directory
+                                archive_file = archive.open(archive_file_name)
+                                try:
+                                    image_list.append(Image.open(archive_file).convert('RGB'))
+                                except IOError:
+                                    pass
+                    if image_list:
+                        image_list[0].save(new_uri, "PDF", resolution=100.0, save_all=True,
+                                           append_images=image_list[1:])
+                    for image in image_list:
+                        image.close()
                 processing_queue.put(file.get_name())
         processing_queue.put(None)
         return True
@@ -272,7 +278,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
         """ Create the progressbar used to notify that files are currently
         being processed.
         """
-        self.infobar.set_show_close_button(False)
+        self.infobar.set_show_close_button(True)
         self.infobar.set_message_type(Gtk.MessageType.INFO)
         self.infobar_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
 
