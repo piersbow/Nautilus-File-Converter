@@ -136,7 +136,7 @@ def find_uri_not_in_use(new_uri):
 def get_archive_handler(archive_uri):
     if is_zipfile(archive_uri):
         return ZipFile
-    elif is_rarfile(archive_uri):
+    elif RAR and is_rarfile(archive_uri):
         return RarFile
     else:
         raise TypeError
