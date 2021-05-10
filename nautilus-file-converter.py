@@ -46,6 +46,7 @@ gi.require_version('Gtk', '3.0')
 DOCUMENT_CONVERTER = 'pandoc'
 AUDIO_VIDEO_CONVERTER = 'ffmpeg'
 DOC_TO_PDF_CONVERTERS = ('pdflatex', 'xelatex', 'lualatex', 'pdfroff')
+DOCUMENT_CONVERTER_FLAGS= []
 
 READ_FORMATS = {}
 WRITE_FORMATS = {}
@@ -103,7 +104,7 @@ if find_executable('pandoc'):
                                 'application/vnd.oasis.opendocument.text',  # ODT
                                 'application/epub+zip', 'text/plain'}
     WRITE_FORMATS['Document'] = [
-        {'name': 'Docx', 'mimes': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']},
+        {'name': 'DOCX', 'mimes': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']},
         {'name': 'ODT', 'mimes': ['application/vnd.oasis.opendocument.text']},
         {'name': 'PPT', 'mimes': ['application/vnd.ms-powerpoint']},
         {'name': 'EPub', 'mimes': ['application/epub+zip']},
@@ -112,7 +113,9 @@ if find_executable('pandoc'):
         if find_executable(converter):
             WRITE_FORMATS['Document'].append({'name': 'PDF', 'mimes': ['application/pdf']})
             break
-
+    if (find_executable('xelatex')):
+        # this flag is needed if the document has fancy characters like emoji
+        DOCUMENT_CONVERTER_FLAGS.append('--pdf-engine=xelatex')
 
 def change_extension(old_path, new_extension):
     split_ver = old_path.split('.')
@@ -235,7 +238,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
                 old_uri = unquote(file.get_uri()[7:])
                 new_uri = find_uri_not_in_use(change_extension(old_uri, write_format['name'].lower()))
                 if convert_type == "Video":
-                    process = subprocess.Popen("exec ffmpeg -i '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    process = subprocess.Popen(f"exec ffmpeg -i '{old_uri}' '{new_uri}'", shell=True)
                     self.other_processes.put(process.pid)
                     process.wait()
                     self.other_processes.get()
@@ -244,13 +247,17 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
                     Image.open(old_uri).convert('RGB').save(new_uri)
 
                 elif convert_type == "Audio":
-                    process = subprocess.Popen("exec ffmpeg -i '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    process = subprocess.Popen(f"exec ffmpeg -i '{old_uri}' '{new_uri}'", shell=True)
                     self.other_processes.put(process.pid)
                     process.wait()
                     self.other_processes.get()
 
                 elif convert_type == "Document":
-                    process = subprocess.Popen("exec pandoc -o '" + old_uri + "' '" + new_uri + "'", shell=True)
+                    flags = ''
+                    for flag in DOCUMENT_CONVERTER_FLAGS:
+                        flags += flag
+                    process = subprocess.Popen(f"exec pandoc {flags} '{old_uri}' -o '{new_uri}'", shell=True)
+
                     self.other_processes.put(process.pid)
                     process.wait()
                     self.other_processes.get()
@@ -305,7 +312,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
             return False
 
         progressbar.pulse()
-        progressbar.set_text("Converting %s" % fname)
+        progressbar.set_text(f"Converting {fname}")
         progressbar.show_all()
         self.infobar_hbox.show_all()
         self.infobar.show_all()
