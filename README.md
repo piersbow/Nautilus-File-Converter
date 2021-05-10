@@ -18,8 +18,8 @@ It supports conversion of images, audio, videos and documents.
 - For video conversion, install ffmpeg
   * `sudo apt install ffmpeg`
 - For image and cbz conversion, install pillow
- * `sudo apt install python3-pil`
-- For cbr conversion, install rar
+  * `sudo apt install python3-pil`
+- For cbr conversion, install rarfile in addition to pillow
   * `sudo apt install python3-rarfile`
 - For basic document conversion, install pandoc
   * `sudo apt install pandoc`
