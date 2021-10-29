@@ -15,7 +15,7 @@ It supports conversion of images, audio, videos and documents.
 
 ### Other dependencies
 
-- For video conversion, install ffmpeg
+- For video and audio conversion, install ffmpeg
   * `sudo apt install ffmpeg`
 - For image and cbz conversion, install pillow
   * `sudo apt install python3-pil`
