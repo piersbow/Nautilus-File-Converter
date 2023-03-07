@@ -238,7 +238,7 @@ class ConverterMenu(GObject.GObject, Nautilus.MenuProvider, Nautilus.LocationWid
                 old_uri = unquote(file.get_uri()[7:])
                 new_uri = find_uri_not_in_use(change_extension(old_uri, write_format['name'].lower()))
                 if convert_type == "Video":
-                    process = subprocess.Popen(f"exec ffmpeg -i '{old_uri}' '{new_uri}'", shell=True)
+                    process = subprocess.Popen(f"exec ffmpeg -i '{old_uri}' -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' '{new_uri}'", shell=True)
                     self.other_processes.put(process.pid)
                     process.wait()
                     self.other_processes.get()
